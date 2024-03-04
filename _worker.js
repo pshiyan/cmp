@@ -1,111 +1,82 @@
-// <!--GAMFC-->version base on commit 43fad05dcdae3b723c53c226f8181fc5bd47223e, time is 2023-06-22 15:20:02 UTC<!--GAMFC-END-->.
+// <!--GAMFC-->version base on commit 43fad05dcdae3b723c53c226f8181fc5bd47223e, time is 2023-06-22 15:20:05 UTC<!--GAMFC-END-->.
 // @ts-ignore
 import { connect } from 'cloudflare:sockets';
 
 // How to generate your own UUID:
 // [Windows] Press "Win + R", input cmd and run:  Powershell -NoExit -Command "[guid]::NewGuid()"
-let userID = 'a17c7863-7af3-461b-bd6c-90daa48b6375';
+let userID = '2e767531-1e32-4274-b1ac-fdc4a62b4a7b';
 
-let proxyIP = '104.28.157.50';
+let proxyIP = '';// 小白勿动，该地址并不影响你的网速，这是给CF代理使用的。'cdn.xn--b6gac.eu.org', 'cdn-all.xn--b6gac.eu.org', 'edgetunnel.anycast.eu.org'
 
-let dohURL = 'https://sky.rethinkdns.com/1:-Pf_____9_8A_AMAIgE8kMABVDDmKOHTAKg='; // https://cloudflare-dns.com/dns-query or https://dns.google/dns-query
-
-// v2board api environment variables
-let nodeId = ''; // 1
-
-let apiToken = ''; //abcdefghijklmnopqrstuvwxyz123456
-
-let apiHost = ''; // api.v2board.com
-
+//let sub = '';// 留空则显示原版内容
+let sub = 'sub.cmliussss.workers.dev';// 内置优选订阅生成器，可自行搭建 https://github.com/cmliu/WorkerVless2sub
+let subconverter = 'api.v1.mk';// clash订阅转换后端，目前使用肥羊的订阅转换功能。支持自建psub 可自行搭建https://github.com/bulianglin/psub
+let subconfig = "https://raw.githubusercontent.com/cmliu/ACL4SSR/main/Clash/config/ACL4SSR_Online_Full_MultiMode.ini"; //订阅配置文件
+// The user name and password do not contain special characters
+// Setting the address will ignore proxyIP
+// Example:  user:pass@host:port  or  host:port
+let socks5Address = '';
+let RproxyIP = 'false';
 if (!isValidUUID(userID)) {
 	throw new Error('uuid is not valid');
 }
 
+let parsedSocks5Address = {}; 
+let enableSocks = false;
+
 export default {
 	/**
 	 * @param {import("@cloudflare/workers-types").Request} request
-	 * @param {{UUID: string, PROXYIP: string, DNS_RESOLVER_URL: string, NODE_ID: int, API_HOST: string, API_TOKEN: string}} env
+	 * @param {{UUID: string, PROXYIP: string}} env
 	 * @param {import("@cloudflare/workers-types").ExecutionContext} ctx
 	 * @returns {Promise<Response>}
 	 */
 	async fetch(request, env, ctx) {
 		try {
+			const userAgent = request.headers.get('User-Agent').toLowerCase();
 			userID = env.UUID || userID;
 			proxyIP = env.PROXYIP || proxyIP;
-			dohURL = env.DNS_RESOLVER_URL || dohURL;
-			nodeId = env.NODE_ID || nodeId;
-			apiToken = env.API_TOKEN || apiToken;
-			apiHost = env.API_HOST || apiHost;
-			const upgradeHeader = request.headers.get('Upgrade');
-			if (!upgradeHeader || upgradeHeader !== 'websocket') {
-				const url = new URL(request.url);
-				switch (url.pathname) {
-					case '/cf':
-						return new Response(JSON.stringify(request.cf, null, 4), {
-							status: 200,
-							headers: {
-								"Content-Type": "application/json;charset=utf-8",
-							},
-						});
-					case '/connect': // for test connect to cf socket
-						const [hostname, port] = ['cloudflare.com', '80'];
-						console.log(`Connecting to ${hostname}:${port}...`);
-
-						try {
-							const socket = await connect({
-								hostname: hostname,
-								port: parseInt(port, 10),
-							});
-
-							const writer = socket.writable.getWriter();
-
-							try {
-								await writer.write(new TextEncoder().encode('GET / HTTP/1.1\r\nHost: ' + hostname + '\r\n\r\n'));
-							} catch (writeError) {
-								writer.releaseLock();
-								await socket.close();
-								return new Response(writeError.message, { status: 500 });
-							}
-
-							writer.releaseLock();
-
-							const reader = socket.readable.getReader();
-							let value;
-
-							try {
-								const result = await reader.read();
-								value = result.value;
-							} catch (readError) {
-								await reader.releaseLock();
-								await socket.close();
-								return new Response(readError.message, { status: 500 });
-							}
-
-							await reader.releaseLock();
-							await socket.close();
-
-							return new Response(new TextDecoder().decode(value), { status: 200 });
-						} catch (connectError) {
-							return new Response(connectError.message, { status: 500 });
-						}
-					case `/${userID}`: {
-						const vlessConfig = getVLESSConfig(userID, request.headers.get('Host'));
-						return new Response(`${vlessConfig}`, {
-							status: 200,
-							headers: {
-								"Content-Type": "text/plain;charset=utf-8",
-							}
-						});
-					}
-					default:
-						// return new Response('Not found', { status: 404 });
-						// For any other path, reverse proxy to 'www.fmprc.gov.cn' and return the original response
-						url.hostname = 'global.cctv.com';
-						url.protocol = 'https:';
-						request = new Request(url, request);
-						return await fetch(request);
+			socks5Address = env.SOCKS5 || socks5Address;
+			sub = env.SUB || sub;
+			subconverter = env.SUBAPI || subconverter;
+			subconfig = env.SUBCONFIG || subconfig;
+			//RproxyIP = env.RPROXYIP || !proxyIP ? 'true' : 'false';
+			if (socks5Address) {
+				RproxyIP = env.RPROXYIP || 'false';
+				try {
+					parsedSocks5Address = socks5AddressParser(socks5Address);
+					enableSocks = true;
+				} catch (err) {
+  			/** @type {Error} */ let e = err;
+					console.log(e.toString());
+					enableSocks = false;
 				}
 			} else {
+				RproxyIP = env.RPROXYIP || !proxyIP ? 'true' : 'false';
+			}
+			const upgradeHeader = request.headers.get('Upgrade');
+			const url = new URL(request.url);
+			if (!upgradeHeader || upgradeHeader !== 'websocket') {
+				// const url = new URL(request.url);
+				switch (url.pathname) {
+				case '/':
+					return new Response(JSON.stringify(request.cf), { status: 200 });
+				case `/${userID}`: {
+					const vlessConfig = await getVLESSConfig(userID, request.headers.get('Host'), sub, userAgent, RproxyIP);
+					return new Response(`${vlessConfig}`, {
+					status: 200,
+					headers: {
+						"Content-Type": "text/plain;charset=utf-8",
+					}
+					});
+				}
+				default:
+					return new Response('Not found', { status: 404 });
+				}
+			} else {
+				if (new RegExp('/proxyip=', 'i').test(url.pathname)) proxyIP = url.pathname.split("=")[1];
+				else if (new RegExp('/proxyip.', 'i').test(url.pathname)) proxyIP = url.pathname.split("/proxyip.")[1];
+				else if (!proxyIP || proxyIP == '') proxyIP = 'proxyip.fxxk.dedyn.io';
 				return await vlessOverWSHandler(request);
 			}
 		} catch (err) {
@@ -144,14 +115,13 @@ async function vlessOverWSHandler(request) {
 	let remoteSocketWapper = {
 		value: null,
 	};
-	let udpStreamWrite = null;
 	let isDns = false;
 
 	// ws --> remote
 	readableWebSocketStream.pipeTo(new WritableStream({
 		async write(chunk, controller) {
-			if (isDns && udpStreamWrite) {
-				return udpStreamWrite(chunk);
+			if (isDns) {
+				return await handleDNSQuery(chunk, webSocket, null, log);
 			}
 			if (remoteSocketWapper.value) {
 				const writer = remoteSocketWapper.value.writable.getWriter()
@@ -163,12 +133,13 @@ async function vlessOverWSHandler(request) {
 			const {
 				hasError,
 				message,
+				addressType,
 				portRemote = 443,
 				addressRemote = '',
 				rawDataIndex,
 				vlessVersion = new Uint8Array([0, 0]),
 				isUDP,
-			} = await processVlessHeader(chunk, userID);
+			} = processVlessHeader(chunk, userID);
 			address = addressRemote;
 			portWithRandomLog = `${portRemote}--${Math.random()} ${isUDP ? 'udp ' : 'tcp '
 				} `;
@@ -192,14 +163,10 @@ async function vlessOverWSHandler(request) {
 			const vlessResponseHeader = new Uint8Array([vlessVersion[0], 0]);
 			const rawClientData = chunk.slice(rawDataIndex);
 
-			// TODO: support udp here when cf runtime has udp support
 			if (isDns) {
-				const { write } = await handleUDPOutBound(webSocket, vlessResponseHeader, log);
-				udpStreamWrite = write;
-				udpStreamWrite(rawClientData);
-				return;
+				return handleDNSQuery(rawClientData, webSocket, vlessResponseHeader, log);
 			}
-			handleTCPOutBound(remoteSocketWapper, addressRemote, portRemote, rawClientData, webSocket, vlessResponseHeader, log);
+			handleTCPOutBound(remoteSocketWapper, addressType, addressRemote, portRemote, rawClientData, webSocket, vlessResponseHeader, log);
 		},
 		close() {
 			log(`readableWebSocketStream is close`);
@@ -218,85 +185,11 @@ async function vlessOverWSHandler(request) {
 	});
 }
 
-let apiResponseCache = null;
-let cacheTimeout = null;
-
-/**
- * Fetches the API response from the server and caches it for future use.
- * @returns {Promise<object|null>} A Promise that resolves to the API response object or null if there was an error.
- */
-async function fetchApiResponse() {
-	const requestOptions = {
-		method: 'GET',
-		redirect: 'follow'
-	};
-
-	try {
-		const response = await fetch(`https://${apiHost}/api/v1/server/UniProxy/user?node_id=${nodeId}&node_type=v2ray&token=${apiToken}`, requestOptions);
-
-		if (!response.ok) {
-			console.error('Error: Network response was not ok');
-			return null;
-		}
-		const apiResponse = await response.json();
-		apiResponseCache = apiResponse;
-
-		// Refresh the cache every 5 minutes (300000 milliseconds)
-		if (cacheTimeout) {
-			clearTimeout(cacheTimeout);
-		}
-		cacheTimeout = setTimeout(() => fetchApiResponse(), 300000);
-
-		return apiResponse;
-	} catch (error) {
-		console.error('Error:', error);
-		return null;
-	}
-}
-
-/**
- * Returns the cached API response if it exists, otherwise fetches the API response from the server and caches it for future use.
- * @returns {Promise<object|null>} A Promise that resolves to the cached API response object or the fetched API response object, or null if there was an error.
- */
-async function getApiResponse() {
-	if (!apiResponseCache) {
-		return await fetchApiResponse();
-	}
-	return apiResponseCache;
-}
-
-/**
- * Checks if a given UUID is present in the API response.
- * @param {string} targetUuid The UUID to search for.
- * @returns {Promise<boolean>} A Promise that resolves to true if the UUID is present in the API response, false otherwise.
- */
-async function checkUuidInApiResponse(targetUuid) {
-	// Check if any of the environment variables are empty
-	if (!nodeId || !apiToken || !apiHost) {
-		return false;
-	}
-
-	try {
-		const apiResponse = await getApiResponse();
-		if (!apiResponse) {
-			return false;
-		}
-		const isUuidInResponse = apiResponse.users.some(user => user.uuid === targetUuid);
-		return isUuidInResponse;
-	} catch (error) {
-		console.error('Error:', error);
-		return false;
-	}
-}
-
-// Usage example:
-//   const targetUuid = "65590e04-a94c-4c59-a1f2-571bce925aad";
-//   checkUuidInApiResponse(targetUuid).then(result => console.log(result));
-
 /**
  * Handles outbound TCP connections.
  *
- * @param {any} remoteSocket 
+ * @param {any} remoteSocket
+ * @param {number} addressType The remote address type to connect to.
  * @param {string} addressRemote The remote address to connect to.
  * @param {number} portRemote The remote port to connect to.
  * @param {Uint8Array} rawClientData The raw client data to write.
@@ -305,24 +198,29 @@ async function checkUuidInApiResponse(targetUuid) {
  * @param {function} log The logging function.
  * @returns {Promise<void>} The remote socket.
  */
-async function handleTCPOutBound(remoteSocket, addressRemote, portRemote, rawClientData, webSocket, vlessResponseHeader, log,) {
-	async function connectAndWrite(address, port) {
+async function handleTCPOutBound(remoteSocket, addressType, addressRemote, portRemote, rawClientData, webSocket, vlessResponseHeader, log,) {
+	async function connectAndWrite(address, port, socks = false) {
 		/** @type {import("@cloudflare/workers-types").Socket} */
-		const tcpSocket = connect({
-			hostname: address,
-			port: port,
-		});
+		const tcpSocket = socks ? await socks5Connect(addressType, address, port, log)
+			: connect({
+				hostname: address,
+				port: port,
+			});
 		remoteSocket.value = tcpSocket;
 		log(`connected to ${address}:${port}`);
 		const writer = tcpSocket.writable.getWriter();
-		await writer.write(rawClientData); // first write, nomal is tls client hello
+		await writer.write(rawClientData); // first write, normal is tls client hello
 		writer.releaseLock();
 		return tcpSocket;
 	}
 
 	// if the cf connect tcp socket have no incoming data, we retry to redirect ip
 	async function retry() {
-		const tcpSocket = await connectAndWrite(proxyIP || addressRemote, portRemote)
+		if (enableSocks) {
+			tcpSocket = await connectAndWrite(addressRemote, portRemote, true);
+		} else {
+			tcpSocket = await connectAndWrite(proxyIP || addressRemote, portRemote);
+		}
 		// no matter retry success or not, close websocket
 		tcpSocket.closed.catch(error => {
 			console.log('retry tcpSocket closed error', error);
@@ -332,7 +230,7 @@ async function handleTCPOutBound(remoteSocket, addressRemote, portRemote, rawCli
 		remoteSocketToWS(tcpSocket, webSocket, vlessResponseHeader, null, log);
 	}
 
-	const tcpSocket = await connectAndWrite(addressRemote, portRemote);
+	let tcpSocket = await connectAndWrite(addressRemote, portRemote);
 
 	// when remoteSocket is ready, pass to websocket
 	// remote--> ws
@@ -414,7 +312,7 @@ function makeReadableWebSocketStream(webSocketServer, earlyDataHeader, log) {
  * @param {string} userID 
  * @returns 
  */
-async function processVlessHeader(
+function processVlessHeader(
 	vlessBuffer,
 	userID
 ) {
@@ -427,16 +325,9 @@ async function processVlessHeader(
 	const version = new Uint8Array(vlessBuffer.slice(0, 1));
 	let isValidUser = false;
 	let isUDP = false;
-	const slicedBuffer = new Uint8Array(vlessBuffer.slice(1, 17));
-	const slicedBufferString = stringify(slicedBuffer);
-
-	const uuids = userID.includes(',') ? userID.split(",") : [userID];
-
-	const checkUuidInApi = await checkUuidInApiResponse(slicedBufferString);
-	isValidUser = uuids.some(userUuid => checkUuidInApi || slicedBufferString === userUuid.trim());
-
-	console.log(`checkUuidInApi: ${await checkUuidInApiResponse(slicedBufferString)}, userID: ${slicedBufferString}`);
-
+	if (stringify(new Uint8Array(vlessBuffer.slice(1, 17))) === userID) {
+		isValidUser = true;
+	}
 	if (!isValidUser) {
 		return {
 			hasError: true,
@@ -665,148 +556,348 @@ function stringify(arr, offset = 0) {
 	return uuid;
 }
 
-
 /**
  * 
+ * @param {ArrayBuffer} udpChunk 
  * @param {import("@cloudflare/workers-types").WebSocket} webSocket 
  * @param {ArrayBuffer} vlessResponseHeader 
  * @param {(string)=> void} log 
  */
-async function handleUDPOutBound(webSocket, vlessResponseHeader, log) {
+async function handleDNSQuery(udpChunk, webSocket, vlessResponseHeader, log) {
+	// no matter which DNS server client send, we alwasy use hard code one.
+	// beacsue someof DNS server is not support DNS over TCP
+	try {
+		const dnsServer = '8.8.4.4'; // change to 1.1.1.1 after cf fix connect own ip bug
+		const dnsPort = 53;
+		/** @type {ArrayBuffer | null} */
+		let vlessHeader = vlessResponseHeader;
+		/** @type {import("@cloudflare/workers-types").Socket} */
+		const tcpSocket = connect({
+			hostname: dnsServer,
+			port: dnsPort,
+		});
 
-	let isVlessHeaderSent = false;
-	const transformStream = new TransformStream({
-		start(controller) {
-
-		},
-		transform(chunk, controller) {
-			// udp message 2 byte is the the length of udp data
-			// TODO: this should have bug, beacsue maybe udp chunk can be in two websocket message
-			for (let index = 0; index < chunk.byteLength;) {
-				const lengthBuffer = chunk.slice(index, index + 2);
-				const udpPakcetLength = new DataView(lengthBuffer).getUint16(0);
-				const udpData = new Uint8Array(
-					chunk.slice(index + 2, index + 2 + udpPakcetLength)
-				);
-				index = index + 2 + udpPakcetLength;
-				controller.enqueue(udpData);
-			}
-		},
-		flush(controller) {
-		}
-	});
-
-	// only handle dns udp for now
-	transformStream.readable.pipeTo(new WritableStream({
-		async write(chunk) {
-			const resp = await fetch(dohURL, // dns server url
-				{
-					method: 'POST',
-					headers: {
-						'content-type': 'application/dns-message',
-					},
-					body: chunk,
-				})
-			const dnsQueryResult = await resp.arrayBuffer();
-			const udpSize = dnsQueryResult.byteLength;
-			// console.log([...new Uint8Array(dnsQueryResult)].map((x) => x.toString(16)));
-			const udpSizeBuffer = new Uint8Array([(udpSize >> 8) & 0xff, udpSize & 0xff]);
-			if (webSocket.readyState === WS_READY_STATE_OPEN) {
-				log(`doh success and dns message length is ${udpSize}`);
-				if (isVlessHeaderSent) {
-					webSocket.send(await new Blob([udpSizeBuffer, dnsQueryResult]).arrayBuffer());
-				} else {
-					webSocket.send(await new Blob([vlessResponseHeader, udpSizeBuffer, dnsQueryResult]).arrayBuffer());
-					isVlessHeaderSent = true;
+		log(`connected to ${dnsServer}:${dnsPort}`);
+		const writer = tcpSocket.writable.getWriter();
+		await writer.write(udpChunk);
+		writer.releaseLock();
+		await tcpSocket.readable.pipeTo(new WritableStream({
+			async write(chunk) {
+				if (webSocket.readyState === WS_READY_STATE_OPEN) {
+					if (vlessHeader) {
+						webSocket.send(await new Blob([vlessHeader, chunk]).arrayBuffer());
+						vlessHeader = null;
+					} else {
+						webSocket.send(chunk);
+					}
 				}
-			}
-		}
-	})).catch((error) => {
-		log('dns udp has error' + error)
-	});
-
-	const writer = transformStream.writable.getWriter();
-
-	return {
-		/**
-		 * 
-		 * @param {Uint8Array} chunk 
-		 */
-		write(chunk) {
-			writer.write(chunk);
-		}
-	};
+			},
+			close() {
+				log(`dns server(${dnsServer}) tcp is close`);
+			},
+			abort(reason) {
+				console.error(`dns server(${dnsServer}) tcp is abort`, reason);
+			},
+		}));
+	} catch (error) {
+		console.error(
+			`handleDNSQuery have exception, error: ${error.message}`
+		);
+	}
 }
 
 /**
  * 
- * @param {string} userID 
- * @param {string | null} hostName
- * @returns {string}
+ * @param {number} addressType
+ * @param {string} addressRemote
+ * @param {number} portRemote
+ * @param {function} log The logging function.
  */
-function getVLESSConfig(userID, hostName) {
-	const vlessws = `vless://${userID}@time.cloudflare.com:8880?encryption=none&type=ws&host=${hostName}&path=%2F%3Fed%3D2048#${hostName}`
-	const vlesswstls = `vless://${userID}@time.cloudflare.com:8443?encryption=none&security=tls&type=ws&host=兄弟，你的自定义域名呢？&path=%2F%3Fed%3D2048#${hostName}`
-	return `
+async function socks5Connect(addressType, addressRemote, portRemote, log) {
+	const { username, password, hostname, port } = parsedSocks5Address;
+	// Connect to the SOCKS server
+	const socket = connect({
+		hostname,
+		port,
+	});
 
-==========================配置详解==============================
+	// Request head format (Worker -> Socks Server):
+	// +----+----------+----------+
+	// |VER | NMETHODS | METHODS  |
+	// +----+----------+----------+
+	// | 1  |    1     | 1 to 255 |
+	// +----+----------+----------+
+
+	// https://en.wikipedia.org/wiki/SOCKS#SOCKS5
+	// For METHODS:
+	// 0x00 NO AUTHENTICATION REQUIRED
+	// 0x02 USERNAME/PASSWORD https://datatracker.ietf.org/doc/html/rfc1929
+	const socksGreeting = new Uint8Array([5, 2, 0, 2]);
+
+	const writer = socket.writable.getWriter();
+
+	await writer.write(socksGreeting);
+	log('sent socks greeting');
+
+	const reader = socket.readable.getReader();
+	const encoder = new TextEncoder();
+	let res = (await reader.read()).value;
+	// Response format (Socks Server -> Worker):
+	// +----+--------+
+	// |VER | METHOD |
+	// +----+--------+
+	// | 1  |   1    |
+	// +----+--------+
+	if (res[0] !== 0x05) {
+		log(`socks server version error: ${res[0]} expected: 5`);
+		return;
+	}
+	if (res[1] === 0xff) {
+		log("no acceptable methods");
+		return;
+	}
+
+	// if return 0x0502
+	if (res[1] === 0x02) {
+		log("socks server needs auth");
+		if (!username || !password) {
+			log("please provide username/password");
+			return;
+		}
+		// +----+------+----------+------+----------+
+		// |VER | ULEN |  UNAME   | PLEN |  PASSWD  |
+		// +----+------+----------+------+----------+
+		// | 1  |  1   | 1 to 255 |  1   | 1 to 255 |
+		// +----+------+----------+------+----------+
+		const authRequest = new Uint8Array([
+			1,
+			username.length,
+			...encoder.encode(username),
+			password.length,
+			...encoder.encode(password)
+		]);
+		await writer.write(authRequest);
+		res = (await reader.read()).value;
+		// expected 0x0100
+		if (res[0] !== 0x01 || res[1] !== 0x00) {
+			log("fail to auth socks server");
+			return;
+		}
+	}
+
+	// Request data format (Worker -> Socks Server):
+	// +----+-----+-------+------+----------+----------+
+	// |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
+	// +----+-----+-------+------+----------+----------+
+	// | 1  |  1  | X'00' |  1   | Variable |    2     |
+	// +----+-----+-------+------+----------+----------+
+	// ATYP: address type of following address
+	// 0x01: IPv4 address
+	// 0x03: Domain name
+	// 0x04: IPv6 address
+	// DST.ADDR: desired destination address
+	// DST.PORT: desired destination port in network octet order
+
+	// addressType
+	// 1--> ipv4  addressLength =4
+	// 2--> domain name
+	// 3--> ipv6  addressLength =16
+	let DSTADDR;	// DSTADDR = ATYP + DST.ADDR
+	switch (addressType) {
+		case 1:
+			DSTADDR = new Uint8Array(
+				[1, ...addressRemote.split('.').map(Number)]
+			);
+			break;
+		case 2:
+			DSTADDR = new Uint8Array(
+				[3, addressRemote.length, ...encoder.encode(addressRemote)]
+			);
+			break;
+		case 3:
+			DSTADDR = new Uint8Array(
+				[4, ...addressRemote.split(':').flatMap(x => [parseInt(x.slice(0, 2), 16), parseInt(x.slice(2), 16)])]
+			);
+			break;
+		default:
+			log(`invild  addressType is ${addressType}`);
+			return;
+	}
+	const socksRequest = new Uint8Array([5, 1, 0, ...DSTADDR, portRemote >> 8, portRemote & 0xff]);
+	await writer.write(socksRequest);
+	log('sent socks request');
+
+	res = (await reader.read()).value;
+	// Response format (Socks Server -> Worker):
+	//  +----+-----+-------+------+----------+----------+
+	// |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
+	// +----+-----+-------+------+----------+----------+
+	// | 1  |  1  | X'00' |  1   | Variable |    2     |
+	// +----+-----+-------+------+----------+----------+
+	if (res[1] === 0x00) {
+		log("socks connection opened");
+	} else {
+		log("fail to open socks connection");
+		return;
+	}
+	writer.releaseLock();
+	reader.releaseLock();
+	return socket;
+}
 
 
-################################################################
-一、CF-workers-vless+ws节点，分享链接如下：
+/**
+ * 
+ * @param {string} address
+ */
+function socks5AddressParser(address) {
+	let [latter, former] = address.split("@").reverse();
+	let username, password, hostname, port;
+	if (former) {
+		const formers = former.split(":");
+		if (formers.length !== 2) {
+			throw new Error('Invalid SOCKS address format');
+		}
+		[username, password] = formers;
+	}
+	const latters = latter.split(":");
+	port = Number(latters.pop());
+	if (isNaN(port)) {
+		throw new Error('Invalid SOCKS address format');
+	}
+	hostname = latters.join(":");
+	const regex = /^\[.*\]$/;
+	if (hostname.includes(":") && !regex.test(hostname)) {
+		throw new Error('Invalid SOCKS address format');
+	}
+	return {
+		username,
+		password,
+		hostname,
+		port,
+	}
+}
 
-${vlessws}
-
----------------------------------------------------------------
-注意：当前节点无需域名，TLS选项关闭
----------------------------------------------------------------
-客户端必要文明参数如下：
-客户端地址（address）：自选域名 或者 自选IP
-端口(port)：7个http端口可任意选择(80、8080、8880、2052、2082、2086、2095)
-用户ID（uuid）：${userID}
-传输协议（network）：ws/websocket
-伪装域名（host）：${hostName}
-路径（path）：/?ed=2048
-################################################################
-
-
-################################################################
-二、CF-workers-vless+ws+tls节点，分享链接如下：
-
-${vlesswstls}
-
----------------------------------------------------------------
-注意：客户端ws选项后的伪装域名host必须改为你自定义的域名
----------------------------------------------------------------
-客户端必要文明参数如下：
-客户端地址（address）：自选域名 或者 自选IP
-端口(port)：6个https端口可任意选择(443、8443、2053、2083、2087、2096)
-用户ID（uuid）：${userID}
-传输协议（network）：ws/websocket
-伪装域名（host）：兄弟，你的自定义域名呢？
-路径（path）：/?ed=2048
-传输安全（TLS）：开启
-跳过证书验证（allowlnsecure）：false
-################################################################
-
-################################################################
-clash-meta
----------------------------------------------------------------
-- type: vless
-  name: ${hostName}
-  server: ${hostName}
-  port: 443
-  uuid: ${userID}
-  network: ws
-  tls: true
-  udp: false
-  sni: ${hostName}
-  client-fingerprint: chrome
-  ws-opts:
-    path: "/?ed=2048"
-    headers:
-      host: ${hostName}
----------------------------------------------------------------
-################################################################
-`;
+/**
+ * @param {string} userID
+ * @param {string | null} hostName
+ * @param {string} sub
+ * @param {string} userAgent
+ * @returns {Promise<string>}
+ */
+async function getVLESSConfig(userID, hostName, sub, userAgent, RproxyIP) {
+	// 如果sub为空，则显示原始内容
+	if (!sub || sub === '') {
+		const vlessMain = `vless://${userID}@${hostName}:443?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2048#${hostName}`;
+  
+		return `
+	################################################################
+	v2ray
+	---------------------------------------------------------------
+	${vlessMain}
+	---------------------------------------------------------------
+	################################################################
+	clash-meta
+	---------------------------------------------------------------
+	- type: vless
+	  name: ${hostName}
+	  server: ${hostName}
+	  port: 443
+	  uuid: ${userID}
+	  network: ws
+	  tls: true
+	  udp: false
+	  sni: ${hostName}
+	  client-fingerprint: chrome
+	  ws-opts:
+	    path: "/?ed=2048"
+	    headers:
+		  host: ${hostName}
+	---------------------------------------------------------------
+	################################################################
+	`;
+	} else if (sub && userAgent.includes('mozilla') && !userAgent.includes('linux x86')) {
+		const vlessMain = `vless://${userID}@${hostName}:443?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2048#${hostName}`;
+	
+		return `
+	################################################################
+	Subscribe / sub 订阅地址, 支持 Base64、clash-meta、sing-box 订阅格式, 您的订阅内容由 ${sub} 提供维护支持, 自动获取ProxyIP: ${RproxyIP}.
+	---------------------------------------------------------------
+	https://${hostName}/${userID}
+	---------------------------------------------------------------
+	################################################################
+	v2ray
+	---------------------------------------------------------------
+	${vlessMain}
+	---------------------------------------------------------------
+	################################################################
+	clash-meta
+	---------------------------------------------------------------
+	- type: vless
+	  name: ${hostName}
+	  server: ${hostName}
+	  port: 443
+	  uuid: ${userID}
+	  network: ws
+	  tls: true
+	  udp: false
+	  sni: ${hostName}
+	  client-fingerprint: chrome
+	  ws-opts:
+		path: "/?ed=2048"
+		headers:
+		  host: ${hostName}
+	---------------------------------------------------------------
+	################################################################
+	telegram 交流群 技术大佬~在线发牌!
+	https://t.me/CMLiussss
+	---------------------------------------------------------------
+	github 项目地址 Star!Star!Star!!!
+	https://github.com/cmliu/edgetunnel
+	---------------------------------------------------------------
+	################################################################
+	`;
+	} else if (sub && userAgent.includes('clash')) {
+	  // 如果sub不为空且UA为clash，则发起特定请求
+	  	if (typeof fetch === 'function') {
+			try {
+				const response = await fetch(`https://${subconverter}/sub?target=clash&url=https%3A%2F%2F${sub}%2Fsub%3Fhost%3D${hostName}%26uuid%3D${userID}%26edgetunnel%3Dcmliu%26proxyip%3D${RproxyIP}&insert=false&config=${encodeURIComponent(subconfig)}&emoji=true&list=false&tfo=false&scv=false&fdn=false&sort=false&new_name=true`);
+				const content = await response.text();
+				return content;
+			} catch (error) {
+				console.error('Error fetching content:', error);
+				return `Error fetching content: ${error.message}`;
+			}
+	  	} else {
+			return 'Error: fetch is not available in this environment.';//
+	  	}
+	} else if (sub && userAgent.includes('sing-box') || userAgent.includes('singbox')) {
+		// 如果sub不为空且UA为sing-box，则发起特定请求
+		if (typeof fetch === 'function') {
+			try {
+				const response = await fetch(`https://${subconverter}/sub?target=singbox&url=https%3A%2F%2F${sub}%2Fsub%3Fhost%3D${hostName}%26uuid%3D${userID}%26edgetunnel%3Dcmliu%26proxyip%3D${RproxyIP}&insert=false&config=${encodeURIComponent(subconfig)}&emoji=true&list=false&tfo=false&scv=false&fdn=false&sort=false&new_name=true`);
+				const content = await response.text();
+				return content;
+			} catch (error) {
+				console.error('获取内容时出错:', error);
+				return `获取内容时出错: ${error.message}`;
+			}
+		} else {
+			return '错误: 在此环境中不支持 fetch。';
+		}
+	} else {
+	  	// 如果sub不为空且UA，则发起一般请求
+	  	if (typeof fetch === 'function') {
+			try {
+		  		const response = await fetch(`https://${sub}/sub?host=${hostName}&uuid=${userID}&edgetunnel=cmliu&proxyip=${RproxyIP}`);
+		  		const content = await response.text();
+		  		return content;
+			} catch (error) {
+		  		console.error('Error fetching content:', error);
+		  		return `Error fetching content: ${error.message}`;
+			}
+	  	} else {
+			return 'Error: fetch is not available in this environment.';
+	  	}
+	}
 }
